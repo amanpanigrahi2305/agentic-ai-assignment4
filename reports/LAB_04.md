@@ -19,11 +19,33 @@ The checkpoint after a read is saved after the revision check, so it holds the p
 
 ## Part B · Kill it at every step
 
-**The hand walk, written before the matrix.** The crash you expect to be worst:
+**The hand walk, written before the matrix.** The crash you expect to be worst: `--die-during-step 5`.
 
-- Its last checkpoint:
-- The steps between it and the crash, and the step running at the crash:
-- For each: its side effect, and what closes it (a key, a recorded result, or nothing):
+**Scope and kill-step numbering.** I am considering the crash that poses the greatest risk of creating a duplicate, rather than the one that repeats the most work. The kill flags count steps in the order they first call a tool, not by the plan's step numbers. When the run opens a pull request, the comment is kill-step 5, so the flag is `--die-during-step 5`. When the draft says `file: none`, the PR step calls no tool, making the comment kill-step 4, so the same crash requires `--die-during-step 4`. The explanation below assumes the run opens a PR. This prediction is for derived keys, which are the default.
+
+**Why this is the worst case.** The tracker commits the comment, but the process dies before receiving the response. The comment exists in the tracker, but the run has no record of the successful write: there is no `tool_call` line, no call-record entry, and no entry in `completed_calls`. When the run resumes, it executes the comment step again.
+
+This is the most dangerous case for duplicate creation because the run cannot tell from its own records whether the comment was posted. The registry's idempotency-key check is what prevents a second comment. For pull requests, the registry also checks by branch, but comments do not have that additional check.
+
+**Last checkpoint before the crash.** The last checkpoint is saved synchronously just before the comment is posted. At that point, `current_step` is 5, and `step_status` shows steps 1–4 as done and step 5 as running. Step 4 is skipped if the draft says `file: none`.
+
+The `completed_calls` field contains the calls for steps 1–3 (step 2 can have more than one call if the plan was revised), and step 4's call with its key if a PR was opened. The `findings` field contains the checked draft and, when a PR is required, its arguments. There is no call record for step 5 because the process dies before the comment call's result can be saved.
+
+**Steps between the checkpoint and the crash.** None. The checkpoint is saved immediately before the comment write. Steps 1–4 are already complete in the saved checkpoint, so the resumed run reuses their saved results rather than calling them again.
+
+**Step running at the crash.** Step 5, `issues_comment`, is performing a keyed write. The tracker has committed the comment, but the process never receives the response and cannot record the result.
+
+**Side effects and what closes each step.**
+
+- **Step 4 — Open the pull request.** This step creates one PR from `repomind/issue-4201`, or no PR if the step is skipped because the draft says `file: none`. **Closed by: a recorded result.** When a PR is opened, its call and key are saved in `completed_calls`. The resumed run uses that record and does not open the PR again.
+
+- **Step 5 — Post the comment.** This step creates one comment on issue 4201. **Closed by: the key.** When the run resumes, it saves another synchronous checkpoint and posts the draft saved in that checkpoint, rather than generating a new draft. The same `run_id`, plan step, and arguments produce the same idempotency key. Before attempting the write, the registry checks whether a comment with that key already exists. Since the tracker committed the original comment, the check finds it and returns the existing result without writing another comment.
+
+  If a repeated write did reach the tracker, the key's unique constraint would mark it `replayed` and write nothing (`harness/tracker.py:19-20`). In this case, however, the registry's check stops the write before it reaches the tracker. Both protections depend on the same key.
+
+**Expected tracker state after resume.** I expect the tracker to contain exactly one comment on issue 4201, with the body from the saved draft, and exactly one open PR from `repomind/issue-4201`. If the draft instead says `file: none`, there should be no PR. No second write should be created. Because the resumed run stops at the registry's key check, the tracker's attempts log should contain one comment row and, if a PR was opened, one PR row.
+
+**Why the other crash points are less dangerous.** A kill at steps 1–3, after or during, only repeats reads, so it wastes time but does not risk duplicate writes. A kill at the PR write, after or during, leaves an uncertain write outcome too, but the registry can also check for an existing PR by branch. A `--die-after-step 5` crash has the same risk, because the comment is written and the resume runs step 5 again, but the trace and call record still show the comment call. With `--die-during-step 5`, the process dies before recording the call's result, leaving the tracker as the only place that confirms the comment exists.
 
 **The matrix, derived keys.** Uncrashed run:
 
