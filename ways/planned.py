@@ -34,6 +34,24 @@ at least one source file: a .ts or .tsx file under src/, not only documentation
 (README.md, CHANGELOG.md, docs/) or translations (src/i18n/*.json). A revision never
 changes a step that is done; it may change a failed step, which then runs again.
 
+Assignment 4 adds the checkpointer (state/checkpointer.py) and resume:
+  - Every save is sync (DURABILITY): RepoMind writes, and slide 12 says sync for any
+    run with an irreversible step. The executor saves after each search and
+    read_file step (reads whose arguments a model call filled, not worth paying for
+    twice), and immediately before each write, once the write's arguments are fixed
+    and written down: the PR's filled arguments, the comment's checked draft. So the
+    replay window holds at most one write, the running one.
+  - A checkpoint is exactly the five fields of harness.formats.CHECKPOINT_FIELDS:
+    the plan, each step's status, every tool call that returned (with its key and
+    result), the findings (the label and file once drafted, the comment's and the
+    PR's arguments, and the executor's counters) and the current step. Never the
+    conversation.
+  - run() asks the checkpointer for the run's last checkpoint first. With one, the
+    executor is rebuilt from it: finished steps are skipped and their recorded
+    results reused, and a write is replayed with the saved arguments, through the
+    registry, so the same key and Assignment 3's check before every attempt decide
+    whether it already happened. With none, the run starts over under its run_id.
+
 Part G's ways/notes.py extends this file without changing it: it subclasses
 Executor and overrides its hooks, record() (after every step), context() (what
 every executor call sees) and the class attribute critique, and asks its questions
@@ -59,7 +77,8 @@ from agent.validator import validate
 from harness.formats import FILL, format_triage_comment, parse_triage_comment, result_paths
 from harness.roles import arg, tool_for
 from harness.schema import errors as schema_errors
-from tools import Unverifiable
+from state.checkpointer import Checkpointer
+from tools import ToolResult, Unverifiable
 
 MAX_REPLANS = 2       # three planner calls in all; a fourth on the same request is the same coin, so a person looks
 MAX_REVISIONS = 2     # a repair of the first search, and one more if the repair also finds nothing
@@ -68,11 +87,19 @@ MAX_FILL_TRIES = 2    # a step the model will not fill on plan, twice, halts the
 CHECKPOINT = "after_first_search"
 SOURCE = re.compile(r"^src/(?!i18n/).+\.tsx?$")   # code, not documentation or translations
 CONTEXT_CHARS = 6000  # of each earlier result, in a fill call
+DURABILITY = "sync"   # Part A: one mode for the run; any run with an irreversible step saves sync (slide 12)
+SAVE_AFTER = ("search", "read_file")   # reads a model call filled: a checkpoint after each, so a replay skips them
 
 
 def role(name: str | None) -> str | None:
     """The role a step's tool plays, or None."""
     return next((r for r in ("read_issue", "search", "read_file", "comment", "open_pr") if tool_for(r) == name), None)
+
+
+def is_open(value) -> bool:
+    """An argument the executor fills: "$fill" anywhere in it. A planner may write a
+    template, such as "label: $fill\nfile: $fill"; that is open too, never a fixed value."""
+    return FILL in str(value)
 
 
 def allows_null(spec: dict) -> bool:
@@ -83,6 +110,10 @@ def allows_null(spec: dict) -> bool:
 
 
 def run(ctx) -> None:
+    last = Checkpointer().last(ctx.run_id)
+    if last is not None:                          # a resume: replay from the last checkpoint
+        Executor.restore(ctx, last).run()
+        return
     plan = plan_until_valid(ctx)
     if plan is None:
         return
@@ -137,6 +168,9 @@ class Executor:
         self.revisions = 0
         self.revised: set[str] = set()   # ids of steps a revision added or changed: the checkpoint follows them
         self.ran: set[str] = set()       # ids of steps that ran and are not to run again
+        self.saver = Checkpointer()
+        self.completed: list[dict] = []  # completed_calls: every tool call that returned, with its key and result
+        self.pr_args: dict | None = None  # the PR's filled arguments, saved before it is opened
 
     # -- the plan, in order ------------------------------------------------------------
     def next_step(self) -> dict | None:
@@ -164,6 +198,8 @@ class Executor:
                 return                            # halted, and ended escalated
             if role(step.get("tool")) == "search" and (first or str(step.get("id")) in self.revised):
                 self.checkpoint(CHECKPOINT, any(SOURCE.match(p) for p in result.get("paths") or []))
+            if role(step.get("tool")) in SAVE_AFTER:
+                self.save(step)                   # after the read, and after any revision it caused
 
     # -- one step ------------------------------------------------------------------------
     def run_step(self, step: dict) -> dict | None:
@@ -180,14 +216,17 @@ class Executor:
         """One tool call for a plan step; None when the registry could not confirm a
         write, and the run has ended escalated (the third exit)."""
         try:
-            return self.ctx.call_tool(self.calls, tool, args, plan_step=step.get("id"))
+            result = self.ctx.call_tool(self.calls, tool, args, plan_step=step.get("id"))
+            self.completed.append({"step": step.get("id"), "tool": tool, "args": args, "key": result.key,
+                                   "result": {"content": result.content, "is_error": result.is_error}})
+            return result
         except Unverifiable as exc:
             self.record(step, args, None, "unverifiable")
             self.ctx.trace.end("escalated", detail=f"step {step.get('id')}: {exc}; a person on review duty decides")
             return None
 
     def filled(self, step: dict, args: dict) -> dict | None:
-        to_fill = [k for k, v in args.items() if str(v).startswith(FILL)]   # "$fill", or "$fill: a note"
+        to_fill = [k for k, v in args.items() if is_open(v)]   # "$fill", "$fill: a note", or a template
         if not to_fill:
             return args
         filled = self.fill(step, args, to_fill)
@@ -205,7 +244,7 @@ class Executor:
         schema = next((t for t in self.ctx.tools.schemas if t["name"] == step["tool"]), None)
         if schema is None:
             return None
-        fixed = {k: v for k, v in args.items() if not str(v).startswith(FILL)}
+        fixed = {k: v for k, v in args.items() if not is_open(v)}
         props = (schema.get("input_schema") or {}).get("properties") or {}
         nullable = {k for k, s in props.items() if isinstance(s, dict) and allows_null(s)}
         for _ in range(MAX_FILL_TRIES):
@@ -218,7 +257,7 @@ class Executor:
                     self.refuse(step, call)       # the boundary: never run, always traced
                     continue
                 filled = {**{k: v for k, v in call.input.items() if k in props}, **fixed}   # the plan's values win
-                if any(k not in filled or filled[k] == "" or str(filled[k]).startswith(FILL)
+                if any(k not in filled or filled[k] == "" or is_open(filled[k])
                        or (filled[k] is None and k not in nullable)
                        for k in keys):
                     continue
@@ -247,8 +286,9 @@ class Executor:
         if role(step["tool"]) == "open_pr":
             parts.append(f"The triage comment's draft names {self.drafted_file}. The pull request's title says what "
                          "the change fixes; its body names that file first, then proposes the change in prose.")
-        notes = {k: str(v)[len(FILL):].lstrip(": ").strip() for k, v in step_args(step).items()
-                 if str(v).startswith(FILL) and str(v).strip() != FILL}
+        notes = {k: (str(v)[len(FILL):].lstrip(": ").strip() if str(v).startswith(FILL)
+                     else f"the plan's template, with each $fill to be replaced: {json.dumps(str(v))}")
+                 for k, v in step_args(step).items() if is_open(v) and str(v).strip() != FILL}
         if notes:
             parts.append("The plan's notes on them: " + "; ".join(f"{k}: {v}" for k, v in notes.items()))
         if note:
@@ -326,6 +366,7 @@ class Executor:
 
     def post(self, step: dict) -> bool:
         """Post the checked draft, the run's last write. False when the run has ended."""
+        self.save(step, running=True)             # sync, with the draft on disk, before the write
         result = self.call(step, step["tool"], self.draft)
         if result is None:
             return False
@@ -340,18 +381,80 @@ class Executor:
         if self.drafted_file in (None, "none"):
             self.record(step, step_args(step), None, "skipped")
             return True
-        number = self.ctx.issue_number
-        args = step_args(step)
-        args[arg("open_pr", "number")] = f"issue-{number}"
-        args[arg("open_pr", "branch")] = f"repomind/issue-{number}"
-        filled = self.filled(step, args)
+        filled = self.pr_args              # a resume replays the saved arguments, never new ones
         if filled is None:
-            return False
+            number = self.ctx.issue_number
+            args = step_args(step)
+            args[arg("open_pr", "number")] = f"issue-{number}"
+            args[arg("open_pr", "branch")] = f"repomind/issue-{number}"
+            filled = self.filled(step, args)
+            if filled is None:
+                return False
+            self.pr_args = filled
+        self.save(step, running=True)             # sync, with the PR's arguments on disk, before the write
         result = self.call(step, step["tool"], filled)
         if result is None:
             return False
         self.record(step, filled, result)
         return True
+
+    # -- the checkpoint, and a resume from one ------------------------------------------------
+    def save(self, step: dict, *, running: bool = False) -> None:
+        """One checkpoint, at the step it belongs to: before a write (running=True: the
+        write is the current step) or after a read (the next step is). Then its trace line."""
+        nxt = self.next_step()
+        current = step.get("id") if running else (nxt.get("id") if nxt else None)
+        checkpoint = {"plan": self.plan, "step_status": self.step_status(current),
+                      "completed_calls": self.completed, "findings": self.findings(), "current_step": current}
+        self.saver.save(self.ctx.run_id, checkpoint, step=step.get("id"), mode=DURABILITY)
+        self.ctx.trace.event("checkpoint", step=step.get("id"), mode=DURABILITY)
+
+    def step_status(self, current) -> dict:
+        """Each plan step's status: its latest result for a step that is not to run again,
+        running for the current one, pending for the rest."""
+        latest = {str(r["id"]): r["status"] for r in self.results}
+        return {str(s.get("id")): (latest.get(str(s.get("id")), "done") if str(s.get("id")) in self.ran
+                                   else "running" if str(s.get("id")) == str(current) else "pending")
+                for s in self.plan.get("steps") or []}
+
+    def findings(self) -> dict:
+        """What the run has established, and what it needs to finish: the label and file
+        once drafted, as the comment states them; the comment's and the PR's arguments;
+        the executor's counters."""
+        label = parse_triage_comment(str(self.draft.get(arg("comment", "body"))))[0] if self.draft else None
+        return {"label": label, "file": self.drafted_file if self.draft else None,
+                "comment": self.draft, "pr": self.pr_args, "plan_version": self.version,
+                "revisions": self.revisions, "revised": sorted(self.revised), "model_calls": self.calls}
+
+    @classmethod
+    def restore(cls, ctx, checkpoint: dict) -> "Executor":
+        """The executor as the checkpoint left it: every completed call recorded again
+        from its saved result, never called again, and the step that was running at the
+        crash left to run, with the saved arguments if it is a write."""
+        ex = cls(ctx, checkpoint["plan"])
+        found = checkpoint.get("findings") or {}
+        ex.version = found.get("plan_version", 1)
+        ex.revisions = found.get("revisions", 0)
+        ex.revised = set(found.get("revised") or [])
+        ex.calls = found.get("model_calls", 0)
+        ex.draft = found.get("comment")
+        ex.drafted_file = found.get("file") if ex.draft else None
+        ex.pr_args = found.get("pr")
+        steps = {str(s.get("id")): s for s in ex.plan.get("steps") or []}
+        for done in checkpoint.get("completed_calls") or []:
+            step = steps.get(str(done["step"])) or {"id": done["step"], "tool": done["tool"]}
+            saved = done.get("result") or {}
+            ex.record(step, done["args"], ToolResult(saved.get("content", ""), bool(saved.get("is_error")), 0.0,
+                                                     done.get("key")))
+            ex.completed.append(done)
+        status = checkpoint.get("step_status") or {}
+        called = {str(c["step"]) for c in ex.completed}
+        for sid, state in status.items():         # a finished step with no call: a skipped PR, a step with no tool
+            if state in ("skipped", "failed") and sid not in called and sid in steps:
+                ex.record(steps[sid], step_args(steps[sid]), None, "skipped" if state == "skipped" else "no_tool")
+        ex.ran = {sid for sid, state in status.items() if state in ("done", "failed", "skipped")}
+        ctx.trace.event("restored", current_step=checkpoint.get("current_step"), completed=len(ex.completed))
+        return ex
 
     def evidence(self) -> dict:
         issue = next((self.outputs.get(str(r["id"]), "") for r in self.results if role(r["tool"]) == "read_issue"), "")

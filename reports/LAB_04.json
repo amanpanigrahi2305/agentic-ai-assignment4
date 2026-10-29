@@ -1,19 +1,77 @@
 {
-  "plan_marks": [],
-  "durability": null,
+  "plan_marks": [
+    {
+      "step": 1,
+      "kind": "read",
+      "checkpoint": "none"
+    },
+    {
+      "step": 2,
+      "kind": "read",
+      "checkpoint": "after"
+    },
+    {
+      "step": 3,
+      "kind": "read",
+      "checkpoint": "after"
+    },
+    {
+      "step": 4,
+      "kind": "keyed_write",
+      "checkpoint": "before"
+    },
+    {
+      "step": 5,
+      "kind": "keyed_write",
+      "checkpoint": "before"
+    }
+  ],
+  "durability": "sync",
   "uncrashed_run_id": null,
   "matrix_derived": [],
   "matrix_uuid": [],
   "duplicate_comment_ids": {},
   "reopened": {
-    "with_store": {"runs": 0, "passes": 0, "mean_tool_calls": null, "mean_tokens": null, "run_ids": []},
-    "empty_store": {"runs": 0, "passes": 0, "mean_tool_calls": null, "mean_tokens": null, "run_ids": []}
+    "with_store": {
+      "runs": 0,
+      "passes": 0,
+      "mean_tool_calls": null,
+      "mean_tokens": null,
+      "run_ids": []
+    },
+    "empty_store": {
+      "runs": 0,
+      "passes": 0,
+      "mean_tool_calls": null,
+      "mean_tokens": null,
+      "run_ids": []
+    }
   },
-  "checkpoint_bytes": {"structured": null, "with_conversation": null, "runs": 0},
+  "checkpoint_bytes": {
+    "structured": null,
+    "with_conversation": null,
+    "runs": 0
+  },
   "contradiction_test": [],
   "forgetting": {
-    "attention": {"fact": null, "effect": {}, "lost": null, "fixed": null},
-    "compaction": {"fact": null, "effect": {}, "lost": null, "fixed": null},
-    "session": {"fact": null, "effect": {}, "stated": null, "lost": null, "fixed": null}
+    "attention": {
+      "fact": null,
+      "effect": {},
+      "lost": null,
+      "fixed": null
+    },
+    "compaction": {
+      "fact": null,
+      "effect": {},
+      "lost": null,
+      "fixed": null
+    },
+    "session": {
+      "fact": null,
+      "effect": {},
+      "stated": null,
+      "lost": null,
+      "fixed": null
+    }
   }
 }
