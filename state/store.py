@@ -254,17 +254,23 @@ class Store:
 
 
 # -- a rule a person stated, told to a run (write_policy.md, "What": Stated) ----------------
-def remember_rule(store: Store, *, text: str, stated_by: str, at: str | None = None,
+def remember_rule(store: Store, *, text: str, stated_by: str, about: str | None = None, at: str | None = None,
                   repository: str = REPOSITORY) -> tuple[str, int]:
     """A maintainer's rule a run was told, kept as stated: word for word, with who stated
     it and when, repository-wide, confirmed because a person with standing stated it. The
-    same rule, already active, writes nothing."""
-    same = [r for r in store.active(repository) if r["source"] == "user" and r["text"] == text]
+    same rule, already active, writes nothing. With `about`, the rule's subject: an active
+    rule from the same person on that subject is a changed rule, and the new one supersedes
+    it ("How": a changed rule from a person)."""
+    active = [r for r in store.active(repository) if r["source"] == "user"]
+    same = [r for r in active if r["text"] == text]
     if same:
         return "same", same[0]["id"]
-    return "inserted", store.write({"repository": repository, "issue": None, "kind": "semantic", "text": text,
-                                    "source": "user", "written_at": at or now(), "origin": "ingested",
-                                    "confirmed": True, "stated_by": stated_by})
+    record = {"repository": repository, "issue": None, "kind": "semantic", "text": text, "source": "user",
+              "written_at": at or now(), "origin": "ingested", "confirmed": True, "stated_by": stated_by}
+    old = [r for r in active if about and r.get("stated_by") == stated_by and about.lower() in r["text"].lower()]
+    if old:
+        return "superseded", store.supersede(old[0]["id"], record)
+    return "inserted", store.write(record)
 
 
 # -- a run's own triage decision (write_policy.md, "A run's own record" and "How") --------

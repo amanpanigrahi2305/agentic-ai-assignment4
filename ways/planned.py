@@ -118,6 +118,7 @@ WITH_CONVERSATION = "CHECKPOINT_CONVERSATION"   # Part E, task 3: a file that ge
 # Part F's switches: one fact told to the run, and the boundaries that can lose it. None set: the run is unchanged.
 FACT = "REPOMIND_FACT"              # the fact, word for word, told as a maintainer's note in every fill call
 FACT_BY = "REPOMIND_FACT_BY"        # who stated it; MAINTAINER when unset
+FACT_ABOUT = "REPOMIND_FACT_ABOUT"  # its subject: a stored rule from the same person on it is superseded, not kept beside it
 FACT_AT = "REPOMIND_FACT_AT"        # where it is told: one of PLACES, prominent when unset
 PADDING = "REPOMIND_PADDING"        # on: Ledgerline's own docs and tests, before the steps' results, in every fill call
 COMPACT_AT = "REPOMIND_COMPACT_AT"  # tokens: past this, the fill calls' history is summarized; the issue never is
@@ -466,7 +467,8 @@ class Executor:
             self.store, run_id=self.ctx.run_id, issue=self.ctx.issue_number, label=label or "bug", file=file,
             file_was=file_was, opened_pr=opened))]
         if self.fact:                             # a maintainer's rule told to this run: kept as stated
-            writes.append(("rule", lambda: remember_rule(self.store, text=self.fact, stated_by=self.fact_by)))
+            writes.append(("rule", lambda: remember_rule(self.store, text=self.fact, stated_by=self.fact_by,
+                                                         about=os.environ.get(FACT_ABOUT))))
         for what, write in writes:
             try:
                 action, rid = write()

@@ -208,23 +208,29 @@
   ],
   "forgetting": {
     "attention": {
-      "fact": null,
-      "effect": {},
-      "lost": null,
-      "fixed": null
+      "fact": "Ledgerline's maintainers label every report about the Export button as feature: they plan its fixes on the feature board.",
+      "effect": {
+        "label": "feature"
+      },
+      "lost": "planned-4192-s01-f92ccf",
+      "fixed": "planned-4192-s01-e3fee8"
     },
     "compaction": {
-      "fact": null,
-      "effect": {},
-      "lost": null,
-      "fixed": null
+      "fact": "Ledgerline's maintainers label every report about the Export button as feature: they plan its fixes on the feature board.",
+      "effect": {
+        "label": "feature"
+      },
+      "lost": "planned-4192-s01-3fd2e5",
+      "fixed": "planned-4192-s01-c2482c"
     },
     "session": {
-      "fact": null,
-      "effect": {},
-      "stated": null,
-      "lost": null,
-      "fixed": null
+      "fact": "Ledgerline's maintainers label every report about the Export button as feature: they plan its fixes on the feature board.",
+      "effect": {
+        "label": "feature"
+      },
+      "stated": "planned-4192-s01-2d7b99",
+      "lost": "planned-4192-s01-751098",
+      "fixed": "planned-4192-s01-13a032"
     }
   }
 }
