@@ -94,8 +94,82 @@
       "matches": true
     }
   ],
-  "matrix_uuid": [],
-  "duplicate_comment_ids": {},
+  "matrix_uuid": [
+    {
+      "run_id": "planned-4201-s01-7c3ac6",
+      "step": 1,
+      "when": "after",
+      "comments": 1,
+      "open_prs": 0,
+      "matches": true
+    },
+    {
+      "run_id": "planned-4201-s01-ffbb6e",
+      "step": 1,
+      "when": "during",
+      "comments": 1,
+      "open_prs": 0,
+      "matches": true
+    },
+    {
+      "run_id": "planned-4201-s01-bc408a",
+      "step": 2,
+      "when": "after",
+      "comments": 1,
+      "open_prs": 0,
+      "matches": true
+    },
+    {
+      "run_id": "planned-4201-s01-4cdc3a",
+      "step": 2,
+      "when": "during",
+      "comments": 1,
+      "open_prs": 0,
+      "matches": true
+    },
+    {
+      "run_id": "planned-4201-s01-cd5c08",
+      "step": 3,
+      "when": "after",
+      "comments": 1,
+      "open_prs": 0,
+      "matches": true
+    },
+    {
+      "run_id": "planned-4201-s01-664b52",
+      "step": 3,
+      "when": "during",
+      "comments": 1,
+      "open_prs": 0,
+      "matches": true
+    },
+    {
+      "run_id": "planned-4201-s01-9acde2",
+      "step": 4,
+      "when": "after",
+      "comments": 2,
+      "open_prs": 0,
+      "matches": false
+    },
+    {
+      "run_id": "planned-4201-s01-e0eecc",
+      "step": 4,
+      "when": "during",
+      "comments": 2,
+      "open_prs": 0,
+      "matches": false
+    }
+  ],
+  "duplicate_comment_ids": {
+    "planned-4201-s01-9acde2": [
+      7,
+      8
+    ],
+    "planned-4201-s01-e0eecc": [
+      10,
+      11
+    ]
+  },
   "reopened": {
     "with_store": {
       "runs": 0,

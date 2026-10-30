@@ -71,10 +71,30 @@ Runs that are not in the table:
 
 ## Part C · Break it on purpose
 
+The same cases as Part B, kill-steps 1 to 4, after and during, with `KEY_MODE=uuid`, after `make reset`.
+
 | Step | When | run_id | Comments | Comment IDs | Open PRs |
 |---|---|---|---|---|---|
+| 1 | after | `planned-4201-s01-7c3ac6` | 1 | 1 | 0 |
+| 1 | during | `planned-4201-s01-ffbb6e` | 1 | 2 | 0 |
+| 2 | after | `planned-4201-s01-bc408a` | 1 | 3 | 0 |
+| 2 | during | `planned-4201-s01-4cdc3a` | 1 | 4 | 0 |
+| 3 | after | `planned-4201-s01-cd5c08` | 1 | 5 | 0 |
+| 3 | during | `planned-4201-s01-664b52` | 1 | 6 | 0 |
+| 4 | after | `planned-4201-s01-9acde2` | 2 | 7, 8 | 0 |
+| 4 | during | `planned-4201-s01-e0eecc` | 2 | 10, 11 | 0 |
+
+Kill-steps 1 to 3 hit the three reads. Kill-step 4 hit the comment in both cases: after step 4, the comment returned and the process died before the code saw it; during step 4, the tracker committed the comment and the process died before the reply. In both runs the two comments have the same body, `label: bug` / `file: none`, and the tracker's attempts log has two `comment`, `written` rows with two different keys.
+
+A run that is not in the table: the first try at during step 4, `planned-4201-s01-75fa87`. A plan revision added a step before the writes, so kill-step 4 was a file read. It left one comment (ID 9) and one open PR, its findings' file `src/notifications/templates.ts`. I ran the case again so that the kill lands on a write; `e0eecc` is the latest run for the case.
 
 What the checkpoint did, and what the key did:
+
+The checkpoint behaved the same way as it did in Part B. On resume, the system skipped the steps already marked as done and reused the draft saved in the checkpoint. As a result, both comments in each pair have the same body because the replay used the same arguments.
+
+However, the checkpoint alone cannot prevent a duplicate write. It only records that the comment step was running; it cannot tell whether the tracker actually committed the comment before the process crashed. That is the job of the idempotency key. With `KEY_MODE=uuid`, though, a new key was generated for every attempt. In `9acde2`, the original comment used key `aadca262…`, while the replay used `85f02c98…`. Since the registry checks for an existing comment using its key only, it found no match. The tracker's unique constraint also found no duplicate key, so both attempts were recorded as `written`.
+
+The PR would still have been protected by the branch check, but no kill in this matrix hit the PR write. The difference is that the checkpoint determines which steps run again, while the idempotency key determines whether replaying a step creates another write.
 
 ## Part D · A memory that can say where it came from
 
