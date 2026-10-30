@@ -47,10 +47,27 @@ The `completed_calls` field contains the calls for steps 1–3 (step 2 can have 
 
 **Why the other crash points are less dangerous.** A kill at steps 1–3, after or during, only repeats reads, so it wastes time but does not risk duplicate writes. A kill at the PR write, after or during, leaves an uncertain write outcome too, but the registry can also check for an existing PR by branch. A `--die-after-step 5` crash has the same risk, because the comment is written and the resume runs step 5 again, but the trace and call record still show the comment call. With `--die-during-step 5`, the process dies before recording the call's result, leaving the tracker as the only place that confirms the comment exists.
 
-**The matrix, derived keys.** Uncrashed run:
+**The matrix, derived keys.** Uncrashed run: `planned-4201-s01-4ee548`, the first run of 4201 after `make reset`. Its draft said `file: none`, so the PR step called no tool, and the run gave numbers to four steps (plan steps 1, 2, 3 and 5). So the matrix is kill-steps 1 to 4, after and during.
 
 | Step | When | run_id | Comments | Open PRs | Matches its findings |
 |---|---|---|---|---|---|
+| 1 | after | `planned-4201-s01-81a449` | 1 | 0 | yes |
+| 1 | during | `planned-4201-s01-c68058` | 1 | 0 | yes |
+| 2 | after | `planned-4201-s01-5ba405` | 1 | 0 | yes |
+| 2 | during | `planned-4201-s01-b6937c` | 1 | 0 | yes |
+| 3 | after | `planned-4201-s01-52dfc6` | 1 | 0 | yes |
+| 3 | during | `planned-4201-s01-d956cc` | 1 | 0 | yes |
+| 4 | after | `planned-4201-s01-0909fe` | 1 | 0 | yes |
+| 4 | during | `planned-4201-s01-913780` | 1 | 0 | yes |
+
+In every case, the last checkpoint's findings say `file: none`, so no case opened a PR, and 0 open PRs is the correct count.
+
+What each kill hit (the `killed` field in `runs/_ledger.jsonl`): kill-steps 1 to 3 hit the three reads, `issues_read`, `code_search` and `code_read_file`. Kill-step 4 hit the comment. After step 4, the comment returned and the process died before the code saw the result. During step 4, the tracker committed the comment and the process died before the reply. In both, the resume saved the step's sync checkpoint again, called `issues_comment` with the same key, and got `already there`. The tracker's attempts log for each run has one row: `comment`, `written`.
+
+Runs that are not in the table:
+
+- The first step-4 runs, `planned-4201-s01-5e532c` (after) and `planned-4201-s01-e708b8` (during). In both, a plan revision added a second search (and, in `5e532c`, a second file read) before the writes, so kill-step 4 was a read, not a write. Each left one comment that matches its findings. I ran step 4 again so that the kill lands on a write. The table shows the second runs, which are the latest for each case.
+- Step 5, which the uncrashed run does not have, for the hand walk. In `planned-4201-s01-264483` (during step 5), a revision added a second search, so kill-step 5 was the comment. It left one comment, and the resume got `already there`. `--die-after-step 5` never fired in four tries (`planned-4201-s01-604e70`, `-746c50`, `-c4710a`, `-1a4aaa`): each of those runs gave numbers to four steps and finished uncrashed.
 
 ## Part C · Break it on purpose
 
