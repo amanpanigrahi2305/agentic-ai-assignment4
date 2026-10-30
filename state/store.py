@@ -253,6 +253,20 @@ class Store:
             db.close()
 
 
+# -- a rule a person stated, told to a run (write_policy.md, "What": Stated) ----------------
+def remember_rule(store: Store, *, text: str, stated_by: str, at: str | None = None,
+                  repository: str = REPOSITORY) -> tuple[str, int]:
+    """A maintainer's rule a run was told, kept as stated: word for word, with who stated
+    it and when, repository-wide, confirmed because a person with standing stated it. The
+    same rule, already active, writes nothing."""
+    same = [r for r in store.active(repository) if r["source"] == "user" and r["text"] == text]
+    if same:
+        return "same", same[0]["id"]
+    return "inserted", store.write({"repository": repository, "issue": None, "kind": "semantic", "text": text,
+                                    "source": "user", "written_at": at or now(), "origin": "ingested",
+                                    "confirmed": True, "stated_by": stated_by})
+
+
 # -- a run's own triage decision (write_policy.md, "A run's own record" and "How") --------
 FILE_WAS = ("read in this run", "taken from memory", "not read in this run", "none")
 DECISION = re.compile(r"^On (\S+), run (\S+) triaged issue (\d+) as (\S+), file (\S+?)\.\n"

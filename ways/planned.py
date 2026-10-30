@@ -64,6 +64,15 @@ Assignment 4, Part D adds the memory store (state/store.py), under state/write_p
     a decision with no file read never replaces one that read its file. A resumed run
     writes it once, at its end; the same decision again writes nothing.
 
+Assignment 4, Part F adds switches, environment variables this file reads (FACT and
+the ones after it), for one fact lost at each boundary and brought back. With none set,
+a run is as above. REPOMIND_FACT tells the run a maintainer's note, word for word, in
+every fill call, at REPOMIND_FACT_AT: prominent (right after the request), buried (a
+plain line halfway through REPOMIND_PADDING's text of Ledgerline's own docs and
+tests), history (an early turn, which REPOMIND_COMPACT_AT's compaction summarizes,
+never the issue), or note (a structured note outside the history). A run told the fact
+also stores it at its end, as the maintainer stated it (state/write_policy.md).
+
 Part G's ways/notes.py extends this file without changing it: it subclasses
 Executor and overrides its hooks, record() (after every step), context() (what
 every executor call sees) and the class attribute critique, and asks its questions
@@ -80,6 +89,7 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
 import re
 
@@ -91,7 +101,7 @@ from harness.formats import FILL, format_triage_comment, parse_triage_comment, r
 from harness.roles import arg, tool_for
 from harness.schema import errors as schema_errors
 from state.checkpointer import Checkpointer, save_copy
-from state.store import REPOSITORY, Refused, Store, now, remember_decision, when
+from state.store import REPOSITORY, Refused, Store, now, remember_decision, remember_rule, when
 from tools import ToolResult, Unverifiable
 
 MAX_REPLANS = 2       # three planner calls in all; a fourth on the same request is the same coin, so a person looks
@@ -104,6 +114,20 @@ CONTEXT_CHARS = 6000  # of each earlier result, in a fill call
 DURABILITY = "sync"   # Part A: one mode for the run; any run with an irreversible step saves sync (slide 12)
 SAVE_AFTER = ("search", "read_file")   # reads a model call filled: a checkpoint after each, so a replay skips them
 WITH_CONVERSATION = "CHECKPOINT_CONVERSATION"   # Part E, task 3: a file that gets each checkpoint again, with the conversation
+
+# Part F's switches: one fact told to the run, and the boundaries that can lose it. None set: the run is unchanged.
+FACT = "REPOMIND_FACT"              # the fact, word for word, told as a maintainer's note in every fill call
+FACT_BY = "REPOMIND_FACT_BY"        # who stated it; MAINTAINER when unset
+FACT_AT = "REPOMIND_FACT_AT"        # where it is told: one of PLACES, prominent when unset
+PADDING = "REPOMIND_PADDING"        # on: Ledgerline's own docs and tests, before the steps' results, in every fill call
+COMPACT_AT = "REPOMIND_COMPACT_AT"  # tokens: past this, the fill calls' history is summarized; the issue never is
+MAINTAINER = "priya-s (maintainer)"
+PLACES = ("prominent",   # right after the request: where a model reads first
+          "buried",      # a plain line halfway through the padding, with no heading to mark it
+          "history",     # an early turn of the history, which compaction summarizes
+          "note")        # a structured note outside the history, in every call, which compaction never touches
+KEEP = 1                            # history turns a compaction keeps as they were
+SUMMARY = "## Summary of the earlier steps"
 
 
 def role(name: str | None) -> str | None:
@@ -206,6 +230,14 @@ class Executor:
         self.pr_args: dict | None = None  # the PR's filled arguments, saved before it is opened
         self.store = Store.for_run(ctx.run_id)
         self.memory: list[dict] | None = None   # the store's active records, read once before the first search
+        self.fact = (os.environ.get(FACT) or "").strip() or None   # Part F: the maintainer's note this run is told
+        self.fact_by = os.environ.get(FACT_BY) or MAINTAINER
+        self.fact_at = os.environ.get(FACT_AT) or "prominent"
+        if self.fact and self.fact_at not in PLACES:
+            raise ValueError(f"{FACT_AT} is one of {PLACES}, not {self.fact_at!r}")
+        self.compact_at = int(os.environ[COMPACT_AT]) if os.environ.get(COMPACT_AT) else None
+        self.history_summary: str | None = None  # Part F: the latest compaction's summary of the history
+        self.history_summarized = 0             # how many history turns that summary stands for
 
     # -- the plan, in order ------------------------------------------------------------
     def next_step(self) -> dict | None:
@@ -311,11 +343,64 @@ class Executor:
 
     def context(self) -> list[str]:
         """What the run has gathered so far, one block per step, for a fill or a critique;
-        first, what the store holds for this issue."""
+        first, what the store holds for this issue. With Part F's switches: the note kept
+        outside the history, the padding, and the history compacted, never the issue."""
         memory = self.memory_block()
-        return ([memory] if memory else []) + [
-            f"## Step {r['id']}, {r['tool']}, {r['status']}\n{self.outputs.get(str(r['id']), '')[:CONTEXT_CHARS]}"
-            for r in self.results]
+        note = [self.fact_note()] if self.fact and self.fact_at == "note" else []
+        padding = [self.padding()] if os.environ.get(PADDING) or (self.fact and self.fact_at == "buried") else []
+        issue = [self.block(r) for r in self.results if role(r["tool"]) == "read_issue"]
+        self.compact_history()
+        return ([memory] if memory else []) + note + padding + issue + self.history()
+
+    def block(self, r: dict) -> str:
+        return f"## Step {r['id']}, {r['tool']}, {r['status']}\n{self.outputs.get(str(r['id']), '')[:CONTEXT_CHARS]}"
+
+    # -- Part F: one fact, and the boundaries that lose it ------------------------------------
+    def fact_note(self) -> str:
+        """The fix for compaction: the fact in a structured note outside the history."""
+        return f"## Notes kept outside the history, in every call\n- A rule a maintainer stated, from {self.fact_by}: {self.fact}"
+
+    def padding(self) -> str:
+        """Text of the same kind as the fact: Ledgerline's own docs, tests and top-level
+        files, never its source code (src/) or its config/. For "buried", the fact is a
+        plain line halfway through it."""
+        repo = self.ctx.root / "fixtures" / "repo"
+        files = sorted(p for p in repo.rglob("*")
+                       if p.is_file() and p.relative_to(repo).parts[0] not in ("src", "config"))
+        text = "\n\n".join(f"{p.relative_to(repo).as_posix()}\n{p.read_text()}" for p in files)
+        if self.fact and self.fact_at == "buried":
+            at = text.find("\n", len(text) // 2) + 1
+            text = f"{text[:at]}{self.fact}\n{text[at:]}"
+        return "## Some of Ledgerline's own files, for reference\n" + text
+
+    def raw_history(self) -> list[str]:
+        """Every step's result but the issue's, oldest first; for "history", the fact is the first turn."""
+        first = [f"## A maintainer's note, from {self.fact_by}\n{self.fact}"] if self.fact and self.fact_at == "history" else []
+        return first + [self.block(r) for r in self.results if role(r["tool"]) != "read_issue"]
+
+    def history(self) -> list[str]:
+        raw = self.raw_history()
+        if self.history_summary is None:
+            return raw
+        return [self.history_summary] + raw[self.history_summarized:]
+
+    def compact_history(self) -> None:
+        """Past COMPACT_AT tokens (characters over four), every history turn but the last
+        KEEP becomes one summary of the tools called and the paths they returned."""
+        if self.compact_at is None:
+            return
+        raw, turns = self.raw_history(), self.history()
+        size = math.ceil(len("\n\n".join(turns)) / 4)
+        if size <= self.compact_at or len(raw) - self.history_summarized <= KEEP:
+            return                                # under the threshold, or nothing new to summarize
+        older = turns[:-KEEP]
+        self.calls += 1
+        response = self.ctx.client.create(system=self.ctx.prompt("compact_paths.md"),
+                                          messages=[{"role": "user", "content": "\n\n".join(older)}])
+        self.ctx.trace.model_call(self.calls, response)
+        self.history_summary = f"{SUMMARY}\n{response.text}"
+        self.history_summarized = len(raw) - KEEP
+        self.ctx.trace.event("compaction", threshold=self.compact_at, tokens=size, summarized=len(older), kept=KEEP)
 
     # -- the memory store (Part D) ----------------------------------------------------------
     def read_memory(self) -> None:
@@ -377,19 +462,28 @@ class Executor:
         else:
             file_was = "not read in this run"
         opened = any(role(r["tool"]) == "open_pr" and r["status"] == "done" for r in self.results)
-        try:
-            action, rid = remember_decision(self.store, run_id=self.ctx.run_id, issue=self.ctx.issue_number,
-                                            label=label or "bug", file=file, file_was=file_was, opened_pr=opened)
-        except Exception as exc:                  # Refused, or a broken store: the comment is posted either way
-            kind = "refused" if isinstance(exc, Refused) else "error"
-            self.ctx.trace.event("store_write", action=kind, record=None, error=f"{type(exc).__name__}: {exc}")
-            return
-        self.ctx.trace.event("store_write", action=action, record=rid, file_was=file_was)
+        writes = [("decision", lambda: remember_decision(
+            self.store, run_id=self.ctx.run_id, issue=self.ctx.issue_number, label=label or "bug", file=file,
+            file_was=file_was, opened_pr=opened))]
+        if self.fact:                             # a maintainer's rule told to this run: kept as stated
+            writes.append(("rule", lambda: remember_rule(self.store, text=self.fact, stated_by=self.fact_by)))
+        for what, write in writes:
+            try:
+                action, rid = write()
+            except Exception as exc:              # Refused, or a broken store: the comment is posted either way
+                kind = "refused" if isinstance(exc, Refused) else "error"
+                self.ctx.trace.event("store_write", what=what, action=kind, record=None,
+                                     error=f"{type(exc).__name__}: {exc}")
+                continue
+            self.ctx.trace.event("store_write", what=what, action=action, record=rid,
+                                 **({"file_was": file_was} if what == "decision" else {}))
 
     def fill_request(self, step: dict, fixed: dict, keys: list[str], note: str = "") -> str:
         parts = [f"Triage issue #{self.ctx.issue_number}. You are running step {step.get('id')} of a fixed "
                  f"plan: {step.get('action')}. Call {step['tool']} once. Fill in: {', '.join(keys)}. "
                  f"The plan fixes: {json.dumps(fixed)}."]
+        if self.fact and self.fact_at == "prominent":   # Part F: right after the request, where a model reads first
+            parts.append(f"A maintainer's note, from {self.fact_by}: {self.fact}")
         if role(step["tool"]) == "comment":
             parts.append("The comment's first two lines must be:\nlabel: <bug | feature | question | docs>\n"
                          "file: <path relative to the repository root, or none>")
