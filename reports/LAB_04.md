@@ -47,6 +47,8 @@ The `completed_calls` field contains the calls for steps 1–3 (step 2 can have 
 
 **Why the other crash points are less dangerous.** A kill at steps 1–3, after or during, only repeats reads, so it wastes time but does not risk duplicate writes. A kill at the PR write, after or during, leaves an uncertain write outcome too, but the registry can also check for an existing PR by branch. A `--die-after-step 5` crash has the same risk, because the comment is written and the resume runs step 5 again, but the trace and call record still show the comment call. With `--die-during-step 5`, the process dies before recording the call's result, leaving the tracker as the only place that confirms the comment exists.
 
+**Note on order.** I wrote and committed the hand walk (commit `8868590`) before the crash matrix; the matrix runs were added later, in commit `b4f6d68`. Before the hand walk, I only crashed runs on the free scripted model (the first line of each of those traces says `harness.scripted:ScriptedTriage`), to test that my checkpoint and resume code worked, as the handout's "Where to start" asks. My prediction was about the real model, which I had not crashed yet.
+
 **The matrix, derived keys.** Uncrashed run: `planned-4201-s01-4ee548`, the first run of 4201 after `make reset`. Its draft said `file: none`, so the PR step called no tool, and the run gave numbers to four steps (plan steps 1, 2, 3 and 5). So the matrix is kill-steps 1 to 4, after and during.
 
 | Step | When | run_id | Comments | Open PRs | Matches its findings |
@@ -61,6 +63,8 @@ The `completed_calls` field contains the calls for steps 1–3 (step 2 can have 
 | 4 | during | `planned-4201-s01-913780` | 1 | 0 | yes |
 
 In every case, the last checkpoint's findings say `file: none`, so no case opened a PR, and 0 open PRs is the correct count.
+
+Whether a crashed run's plan differed: in all 8 cases in the table, the final plan has the uncrashed run's five steps with the same tools (read the issue, search, read a file, open the PR, post the comment), and the same plan steps called a tool (1, 2, 3 and 5; the PR was skipped). Only the search changed. Five runs (`c68058`, `5ba405`, `52dfc6`, `d956cc`, `913780`) accepted two revisions that changed the search, and ended on plan version 3. `81a449`, `b6937c` and `0909fe` stayed on version 1, like the uncrashed `4ee548`: each one's revision was rejected. The four runs killed at steps 1 and 2 had no checkpoint, so each resume wrote a new plan. Two runs outside the table did have a different plan: in the first step-4 runs, a revision added steps (below).
 
 What each kill hit (the `killed` field in `runs/_ledger.jsonl`): kill-steps 1 to 3 hit the three reads, `issues_read`, `code_search` and `code_read_file`. Kill-step 4 hit the comment. After step 4, the comment returned and the process died before the code saw the result. During step 4, the tracker committed the comment and the process died before the reply. In both, the resume saved the step's sync checkpoint again, called `issues_comment` with the same key, and got `already there`. The tracker's attempts log for each run has one row: `comment`, `written`.
 
@@ -90,11 +94,7 @@ A run that is not in the table: the first try at during step 4, `planned-4201-s0
 
 What the checkpoint did, and what the key did:
 
-The checkpoint behaved the same way as it did in Part B. On resume, the system skipped the steps already marked as done and reused the draft saved in the checkpoint. As a result, both comments in each pair have the same body because the replay used the same arguments.
-
-However, the checkpoint alone cannot prevent a duplicate write. It only records that the comment step was running; it cannot tell whether the tracker actually committed the comment before the process crashed. That is the job of the idempotency key. With `KEY_MODE=uuid`, though, a new key was generated for every attempt. In `9acde2`, the original comment used key `aadca262…`, while the replay used `85f02c98…`. Since the registry checks for an existing comment using its key only, it found no match. The tracker's unique constraint also found no duplicate key, so both attempts were recorded as `written`.
-
-The PR would still have been protected by the branch check, but no kill in this matrix hit the PR write. The difference is that the checkpoint determines which steps run again, while the idempotency key determines whether replaying a step creates another write.
+The checkpoint behaved the same way as it did in Part B. On resume, the system skipped the steps already marked as done and reused the draft saved in the checkpoint. As a result, both comments in each pair have the same body because the replay used the same arguments. However, the checkpoint alone cannot prevent a duplicate write. It only records that the comment step was running; it cannot tell whether the tracker actually committed the comment before the process crashed. That is the job of the idempotency key. With `KEY_MODE=uuid`, though, a new key was generated for every attempt. In `9acde2`, the original comment used key `aadca262…`, while the replay used `85f02c98…`. Since the registry checks for an existing comment using its key only, it found no match. The tracker's unique constraint also found no duplicate key, so both attempts were recorded as `written`. The PR would still have been protected by the branch check, but no kill in this matrix hit the PR write. The difference is that the checkpoint determines which steps run again, while the idempotency key determines whether replaying a step creates another write.
 
 ## Part D · A memory that can say where it came from
 
@@ -181,7 +181,7 @@ The four questions, in order:
 - Do I know the steps and their order in advance? Yes, for each run, before any step runs. The planner writes the plan at the start. The validator checks it, and the schema check fixes its end: the PR, then the comment, last. The executor runs the steps in order, and runs nothing off the plan. A revision can add or change a search, but it goes through the same checks. This adds a graph: built from a validated plan for each run, not fixed in code.
 - Do runs outlive a single process? Yes. A killed run resumes in a new process under the same run_id (Part B), and later runs read the store again (Part D). This adds checkpoints on disk: sync, in SQLite, with a shared store next to them.
 - Do steps have irreversible side effects? Yes: the PR and the comment. This adds a key on every write. The key comes from the run, the plan step and the arguments, and the registry checks before each attempt (a PR by branch, a comment by key). Today a half-done run does not have to finish on its own, because a person resumes it. When RepoMind triages each new issue unattended, it must, and this answer then adds durable execution (item 4).
-- Do I want to own the context myself? Yes. My code builds each fill call's message: the step, the plan's notes, the memory block (each record's kind, source and age) and the earlier results. It keeps the store's records, and so every `issue:<n>` record, out of the planner. Part F depends on this control. This adds my own harness.
+- Do I want to write the loop and compaction code myself? Yes: RepoMind runs its own loop and its own compaction, not an SDK's. The loop is the planned way's executor (`Executor.run()`, `ways/planned.py:247`), from Assignment 3's solution and extended here with checkpoints, resume and the store; the compaction is `compact_history()` (`ways/planned.py:388`), with `prompts/compact_paths.md`, written for Part F. My code also builds each fill call's message: the step, the plan's notes, the memory block (each record's kind, source and age) and the earlier results. It keeps the store's records, and so every `issue:<n>` record, out of the planner. Part F depends on this control. This adds my own harness.
 
 The design: a graph from a validated plan, run by my own harness, with sync checkpoints on disk and a key on every write. That is RepoMind now. Durable execution comes next, when runs must finish without a person.
 
@@ -252,4 +252,4 @@ The fourth boundary is a process restart. Part B implemented its fix: a checkpoi
 
 ## AI assistance
 
-Which tool, what it wrote, and what you checked.
+I used Claude Code to help implement the code, to run the crash matrices and the other runs, and to fill in `reports/LAB_04.json` and the report's data tables; it also drafted the Part D summaries. I wrote the Part B hand walk myself and committed it before the first real-model crash. I also wrote the write policy (committed before the store), the Part C paragraph, the Part E answers, the Part F write-up, `CHANGES.md` and `ARCHITECTURE.md`, and used Claude Code to check them against the runs and the code. I ran `make test` and `make ping` before writing any code, and `make check-04` passes all 82 automated points with no integrity flags. The reported numbers were cross-checked against the traces, the request records and the tracker's database.
