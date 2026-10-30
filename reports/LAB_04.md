@@ -98,22 +98,24 @@ The PR would still have been protected by the branch check, but no kill in this 
 
 ## Part D · A memory that can say where it came from
 
-- The write policy, in brief:
-- The three candidates, and how each was stored:
+- The write policy, in brief: `state/write_policy.md`. A run writes to the store only at its end, after it posts its comment; nothing is written mid-run, and a run that escalates writes nothing. RepoMind keeps what was expensive to derive (a procedure, a run's triage decision), what a person with standing stated, and what it checked against the repository's files. Issue text is kept only as an unconfirmed, episodic record of what the issue claimed. Every record carries its source, `written_at` (when the information was first seen), its origin and `confirmed`. A contradicted fact or a changed rule supersedes the old record, which stays in the store, inactive. Each issue has one active triage decision: the same decision writes nothing, and a decision with no file read never replaces one that read its file. `state/store.py` enforces the hard rules in code: it refuses a record without full provenance, a mention of auto-merging outside an `issue:<n>` record, and issue text stored as semantic or confirmed.
+- The three candidates, and how each was stored: by `eval/store_candidates.py`, into `state/store.db`, as records 1, 2 and 3. Each `written_at` is the candidate's `when`. A and C are repository-wide (`issue: null`), so every run reads them; B is about issue 4188, and a run sees it only on 4188, never in the planner's context.
 
 | Candidate | Stored? | Kind | source | origin | confirmed | Invites |
 |---|---|---|---|---|---|---|
-| A | | | | | | |
-| B | | | | | | |
-| C | | | | | | |
+| A | yes, word for word (record 1) | procedural | `memory` | `derived` | `true`: `package.json`'s scripts and the README agreed with it when it was stored | staleness |
+| B | yes, as what the issue claimed, never as a fact (record 2) | episodic | `issue:4188` | `ingested` | `false` | poisoning |
+| C | yes, word for word, with `stated_by: priya-s (maintainer)` (record 3) | semantic | `user` | `ingested` | `true`: a maintainer stated it | contradiction when it changes |
 
-- Eviction: the size, the rule, and how long an entry lives at your write rate:
+- Eviction: the size, the rule, and how long an entry lives at your write rate: 500 records a repository, inactive ones counted. At the limit, a write deletes the oldest episodic record, an inactive one first; semantic and procedural records are never evicted, only superseded, so a changed rule keeps its history. The write rate: under the policy's decision rule, my 28 completed runs of 4201 would have written 7 decisions (0.25 a run), and the six runs of 4207 with the real store wrote 1 (the seed run's; the five after it reached the same decision). At an assumed 5 runs a day, an entry lives 500 ÷ (0.25 × 5) = 400 days; in the worst case, one record every run, 100 days.
 
 | Issue 4207, five runs each | With the store | Empty store |
 |---|---|---|
-| Passes | | |
-| Mean tool calls | | |
-| Mean tokens | | |
+| Passes | 0 of 5 | 0 of 5 |
+| Mean tool calls | 5.8 | 6.0 |
+| Mean tokens | 12,648 | 12,054 |
+
+The store did not help on 4207: a measured null result. The seed run, `planned-4207-s01-191224`, wrote decision record 4, `file: none`. With the store, each run's `store_read` returned records 4, 1 and 3 before its first search; with an empty store, each returned none. All ten runs named `file: none`, so no run named a file it read, and none took one from memory: the only decision in memory said there was no file. Each run with the store reached the same decision, so the decision rule wrote nothing more (`same`). The cause is in the search, not in the store. `code_search` matches a literal substring of one line (`tools/search_repo.py:111`), and Mistral searched for phrases such as `weekly scheduled export`, which no line holds: all 33 searches in the eleven runs of 4207 returned no results. Each run then guessed a path that does not exist, `src/scheduler.ts` in nine of them. The store cost about 594 tokens a run (+4.9%): the memory block in each fill call. The tool calls differ only by revisions: five in the plan, one fewer when the PR is skipped, and one more for each search a revision adds.
 
 ## Part E · Answer from your own runs
 
