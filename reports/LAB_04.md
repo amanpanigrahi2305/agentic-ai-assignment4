@@ -191,13 +191,64 @@ One thing that slide 44 says no framework decides: what to checkpoint, and where
 
 The fact, word for word, and what the comment states when a run uses it:
 
+> Ledgerline's maintainers label every report about the Export button as feature: they plan its fixes on the feature board.
+
+Each run was given this fact as a note from priya-s (maintainer). It changes only the triage label for issue 4192. The correct answer is `label: bug`, file `src/components/ExportButton.tsx`. A run that uses the fact should instead post `label: feature`. A run that loses or ignores the fact posts `label: bug`.
+
 | Case | The lost run | Where it lost the fact (trace and request record) | The fix | The fixed run |
 |---|---|---|---|---|
-| Attention | | | | |
-| Compaction | | | | |
-| The session | | | | |
+| Attention | `planned-4192-s01-f92ccf` | The comment-drafting call is trace line 25, request 6 (`issues_comment`). It received the fact as a plain line without a heading, buried in a config table (`docs/CONFIG.md`, the import-queue variables) among roughly 27,000 characters of Ledgerline documentation, tests, and top-level files. The fact was 16,477 characters from the nearer end of a 33,882-character context, almost exactly in the middle. The other fill calls (requests 2, 5, and 7) also received it, between 13,866 and 16,565 characters from an end. The comment at trace line 30 says `label: bug`. The fact was inside the context window, so the window did not lose it. The model failed to use it: attention lost it. | Slide 34: give the fact a more prominent position rather than increasing the window size. I kept the same padding and moved the fact directly after the request using `REPOMIND_FACT_AT=prominent REPOMIND_PADDING=on`. I did not shorten the context. | `planned-4192-s01-e3fee8`. The drafting call is again trace line 25, request 6, and its context is almost the same size: 34,028 characters. Only the fact's position changed. It is now 2,169 characters from the start, immediately after the system prompt and the first line of the request. The comment at trace line 30 says `label: feature`. |
+| Compaction | `planned-4192-s01-3fd2e5` | The fact appeared in the first turn of the fill calls' history. Request 2 (trace line 7) received it. Request 4 (trace line 12), the first compaction call, received only that turn. Its summary, produced using `prompts/compact_paths.md`, dropped the rule and kept only tool and path lines, and those lines were invented: the run had made one search (`Export button`, 0 paths), but the summary listed calls such as `code_read_file: src/export-button.ts`. The fact disappeared at trace line 13: `compaction` {threshold 50, tokens 82, summarized 1, kept 1}. No later call received it. The drafting call at trace line 19, request 7, did not receive the fact. Its history begins with "## Summary of the earlier steps / code_search: 0 paths", the second compaction's summary (trace line 18). The comment at trace line 24 says `label: bug`. | Slide 34: keep the fact in a structured note outside the conversation history, rather than increasing the window. I put it under "## Notes kept outside the history, in every call" using `REPOMIND_FACT_AT=note`, with the same 50-token compaction threshold. Compaction summarizes only the history; it never touches the note or the issue (slide 32: never summarize the task). A larger window would only delay compaction. When compaction runs, the summary still keeps only tools and paths. | `planned-4192-s01-c2482c`. Compaction still ran twice, at trace lines 25 and 30. The compaction call (request 5) did not receive the fact, but the fact survived because it was never part of the history. The drafting call at trace line 31, request 8, received it in the note, 534 characters from an end. The comment at trace line 33 says `label: feature`. Its file line says `none`: the searches found no path, and the read at trace line 27 requested `src/export/ExportButton.tsx`, which does not exist. |
+| The session | `planned-4192-s01-751098` | This run used an empty store (`REPOMIND_STORE=empty`), so it had no access to the fact. Its `store_read` at trace line 5 returned `[]`, and none of its calls received the fact (requests 1–6). The drafting call is trace line 16, request 5. The comment at trace line 21 says `label: bug`. The earlier stated run's session knew the fact, but this new session had no way to recover it. The session boundary lost it. | Slide 34: persist the fact in the shared store. The stated run wrote it to the real store as record 10. The fixed run then used the real store without being explicitly told the fact. | `planned-4192-s01-13a032`. Its `store_read` at trace line 5 returned `[10, 9, 5, 1]`, before the first search at trace line 8. Record 10 is the maintainer's rule, stored word for word. Record 9 is the stated run's own triage decision (`as feature`). The drafting call at trace line 21, request 6, received the fact 2,482 characters from an end, under "## What RepoMind's memory store holds for this issue, newest first". The block describes record 10 as "a rule from a person with standing: follow it". The comment at trace line 26 says `label: feature`. Its decision matched record 9, so the store wrote nothing (`same`, trace line 27). |
 
-The session case's stated run:
+The session case's stated run: `planned-4192-s01-2d7b99`.
+
+### How the stated run populated the store
+
+The stated run for the session case was `planned-4192-s01-2d7b99`. It used the real store. `REPOMIND_FACT` told it the fact, directly after the request; `REPOMIND_FACT_ABOUT="Export button"` named the rule's subject, so that the new rule supersedes an older one from the same person on that subject. The fact appeared in every fill call: requests 2, 4, 5, and 6. The run posted `label: feature` at trace line 20.
+
+At the end of the run, it wrote two records:
+
+- **Trace line 21, record 9:** the run's triage decision. It superseded record 7, which held round 1's `bug` decision.
+- **Trace line 22, record 10:** the maintainer's rule. It is `semantic`, has `source: user`, `stated_by: priya-s (maintainer)`, and `confirmed: true`. Its text preserves the fact word for word. Under the write policy, a changed rule from the same person supersedes the previous rule, so record 10 superseded record 8, which held the round 1 wording.
+
+Both the lost run and the fixed run started after this stated run.
+
+There is one limitation in interpreting the fixed session run: it received two records that both point toward `feature`, the rule in record 10 and the stated run's triage decision in record 9. Only record 10 contains the fact word for word. The fixed run by itself therefore cannot establish which record the model followed. A store containing record 10 but not record 9 would isolate the effect of the rule. I did not run that test.
+
+The lost run had to use an empty store for this comparison. After the stated run, the real store contained records 10 and 9. Any run using the real store would retrieve them, even if nobody explicitly supplied the fact. An empty store was therefore the only way to test whether a new session could lose the fact.
+
+### Round 1: the original wording
+
+The first round used the handout's example word for word:
+
+> Ledgerline's maintainers label every report about the Export button feature: they plan its fixes on the feature board.
+
+Across 13 real runs, none used the fact. Every comment said `label: bug`.
+
+- **Attention:** lost `f7dd8f`; fixed `d6720c`, `c4ecd7`, `9551db`.
+- **Compaction:** lost `fc8c6e`; fixed `b81cb9`, `6fd842`, `bfcd35`.
+- **Session:** stated `50c873` (which stored that wording as record 8), lost `700646`, fixed `c9611f`, `2b7d78`, `05323f`.
+
+The original wording also failed when placed directly after the request, approximately 2,170 characters from an end. It failed in the stated run too, even though that run received the fact without padding, 2,169 characters from an end in a 5,779-character context.
+
+The problem was the wording itself. The sentence did not clearly specify the label. "Label every report about the Export button feature" could mean that the reports concern the Export-button feature, without actually saying what label to assign.
+
+I tested a clearer version in diagnostic run `planned-4192-s01-ab42b4`. It received the new wording ("... about the Export button as feature: ...") plainly, with an empty store, and posted `label: feature`. I then repeated all seven cases using the new wording.
+
+### Round 2: remaining failures
+
+The only failures in round 2 were in the compaction case, in its fixed run with the note:
+
+- `planned-4192-s01-f43804` escalated with "step 3: no on-plan call in 2 tries". It posted no comment, so there is no result to evaluate.
+- `planned-4192-s01-57a559` received the note 2,512 characters from an end in a 5,208-character context, but still posted `label: bug`.
+- `planned-4192-s01-c2482c`, the third attempt, posted `label: feature`.
+
+The note therefore restored the fact to the drafting call in every readable attempt, but the model used it in only one of the two attempts that produced comments. The other cases worked on their first attempt in round 2.
+
+### The fourth boundary: restart
+
+The fourth boundary is a process restart. Part B implemented its fix: a checkpoint. The crash matrix showed that a crash did not lose any state already saved in the checkpoint (all 8 derived-key cases, 20 of 20 points). However, no Part F run tests this restart boundary.
 
 ## AI assistance
 
