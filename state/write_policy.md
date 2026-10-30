@@ -30,8 +30,10 @@ RepoMind does not store:
 The record's text comes from a fixed template populated with fields from the run itself:
 
     On <date>, run <run_id> triaged issue <n> as <label>, file <path or none>.
-    The file was <read in this run | taken from memory | none>.
+    The file was <read in this run | taken from memory | not read in this run | none>.
     It <opened | did not open> a PR.
+
+"Taken from memory" means a record the run read named the file, and the run did not read it; "not read in this run" means the run named a file it neither read nor found in memory.
 
 The template never copies text from an issue, comment, or repository file. Only an `issue:<n>` record may mention auto-merging. If a run's record would mention auto-merging, the run does not write that record.
 
