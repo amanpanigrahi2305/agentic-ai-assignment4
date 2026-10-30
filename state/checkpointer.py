@@ -177,3 +177,34 @@ class Checkpointer:
         rows = self._rows("SELECT COALESCE(SUM(LENGTH(CAST(data AS BLOB))), 0) FROM checkpoints WHERE run_id = ?",
                           (run_id,))
         return int(rows[0][0])
+
+
+# -- Part E, task 3 only: the same checkpoint with the conversation, in another file -----------
+def save_copy(path: Path, run_id: str, checkpoint: dict, *, step) -> None:
+    """One checkpoint as save() writes it, plus the conversation, to a separate SQLite
+    file with the same table, so its size can be compared. Never the checkpointer's own
+    database: a checkpoint there never holds the conversation."""
+    path = Path(path)
+    if path.resolve() == DEFAULT.resolve():
+        raise ValueError("a checkpoint with the conversation goes to a separate file, never to the checkpoint database")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    db = sqlite3.connect(path, timeout=30)
+    try:
+        with db:
+            db.executescript(SCHEMA)
+            db.execute("INSERT INTO checkpoints (run_id, step, mode, saved_at, data) VALUES (?, ?, ?, ?, ?)",
+                       (run_id, json.dumps(step), "sync", time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                        json.dumps(checkpoint)))
+    finally:
+        db.close()
+
+
+def size_of(path: Path, run_id: str) -> int:
+    """The bytes one run's checkpoints take together in such a file."""
+    db = sqlite3.connect(Path(path), timeout=30)
+    try:
+        row = db.execute("SELECT COALESCE(SUM(LENGTH(CAST(data AS BLOB))), 0) FROM checkpoints WHERE run_id = ?",
+                         (run_id,)).fetchone()
+        return int(row[0])
+    finally:
+        db.close()

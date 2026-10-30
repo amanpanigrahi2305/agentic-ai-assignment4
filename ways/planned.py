@@ -80,6 +80,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import re
 
 from agent.critique import self_critique, verify
@@ -89,7 +90,7 @@ from agent.validator import validate
 from harness.formats import FILL, format_triage_comment, parse_triage_comment, result_paths
 from harness.roles import arg, tool_for
 from harness.schema import errors as schema_errors
-from state.checkpointer import Checkpointer
+from state.checkpointer import Checkpointer, save_copy
 from state.store import REPOSITORY, Refused, Store, now, remember_decision, when
 from tools import ToolResult, Unverifiable
 
@@ -102,6 +103,7 @@ SOURCE = re.compile(r"^src/(?!i18n/).+\.tsx?$")   # code, not documentation or t
 CONTEXT_CHARS = 6000  # of each earlier result, in a fill call
 DURABILITY = "sync"   # Part A: one mode for the run; any run with an irreversible step saves sync (slide 12)
 SAVE_AFTER = ("search", "read_file")   # reads a model call filled: a checkpoint after each, so a replay skips them
+WITH_CONVERSATION = "CHECKPOINT_CONVERSATION"   # Part E, task 3: a file that gets each checkpoint again, with the conversation
 
 
 def role(name: str | None) -> str | None:
@@ -122,7 +124,25 @@ def allows_null(spec: dict) -> bool:
         isinstance(b, dict) and allows_null(b) for b in spec.get("anyOf") or spec.get("oneOf") or [])
 
 
+def listen(ctx) -> None:
+    """Part E, task 3, with CHECKPOINT_CONVERSATION set: keep every message the way sends
+    the model (each call's system prompt and messages), so that each checkpoint can be
+    saved a second time with them, to that file. Off, the run is unchanged."""
+    if not os.environ.get(WITH_CONVERSATION) or hasattr(ctx, "sent"):
+        return
+    ctx.sent = []
+    send = ctx.client.create
+
+    def create(*args, **kwargs):
+        ctx.sent.append({"role": "system", "content": kwargs.get("system")})
+        ctx.sent.extend(copy.deepcopy(kwargs.get("messages") or []))
+        return send(*args, **kwargs)
+
+    ctx.client.create = create
+
+
 def run(ctx) -> None:
+    listen(ctx)
     last = Checkpointer().last(ctx.run_id)
     if last is not None:                          # a resume: replay from the last checkpoint
         Executor.restore(ctx, last).run()
@@ -498,6 +518,9 @@ class Executor:
                       "completed_calls": self.completed, "findings": self.findings(), "current_step": current}
         self.saver.save(self.ctx.run_id, checkpoint, step=step.get("id"), mode=DURABILITY)
         self.ctx.trace.event("checkpoint", step=step.get("id"), mode=DURABILITY)
+        if getattr(self.ctx, "sent", None) is not None:   # Part E's measurement: the same checkpoint, with the conversation
+            save_copy(os.environ[WITH_CONVERSATION], self.ctx.run_id, {**checkpoint, "conversation": self.ctx.sent},
+                      step=step.get("id"))
 
     def step_status(self, current) -> dict:
         """Each plan step's status: its latest result for a step that is not to run again,

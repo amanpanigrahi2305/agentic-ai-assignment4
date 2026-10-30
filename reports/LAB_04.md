@@ -120,10 +120,72 @@ The store did not help on 4207: a measured null result. The seed run, `planned-4
 ## Part E · Answer from your own runs
 
 1. Your prediction against the matrix:
+
+The uncrashed run (`planned-4201-s01-4ee548`) drafted `file: none`, so the comment was kill-step 4. The worst case I named therefore ran as `--die-during-step 4` (`913780`). My walk predicted this shift. Most of the walk held for that case. Four parts were wrong or never tested.
+
+What held:
+- The last checkpoint was the sync one before the comment. The resume restored `current_step` 5 (`913780`, `0909fe`).
+- No step ran between that checkpoint and the crash. After the resume, only the comment ran, with 0 model calls and 0 tokens.
+- The key closed the comment. The resume saved the comment's checkpoint again, and `issues_comment` returned `already there`. The attempts log has one row: `comment`, `written`. `264483` (kill-step 5, after a revision) shows the same: comment 16, key `3bea836b…`.
+- The tracker held one comment and no PR in all 8 cases. That is the `file: none` half of my prediction.
+- Part C shows the other side. With random keys, both kills at the comment left two comments (`9acde2`: 7 and 8; `e0eecc`: 10 and 11).
+
+Where it was wrong, or never tested:
+- The PR was never tested. Each graded run drafted `file: none`, so no graded run opened a PR. My claims that a recorded result closes the PR, that the branch check stops a second PR, and that one PR remains have no evidence. In Part C, `75fa87` opened a PR, but its kill hit a file read before both writes.
+- Kills at steps 1 to 3 repeat more than reads. At kill-steps 1 and 2, no checkpoint existed yet: the first one is saved after the first search, once the code sees the result. So each resume started the whole run again, under the same run_id, with a new plan from the planner, every read and every fill. The resumed halves made 5 to 7 model calls and used 8,130 to 12,913 tokens. At kill-step 3, the resume started at the checkpoint after step 2. It ran the step-3 fill (a model call) again, and also the read after an "after" kill. My walk was right that none of these cases risked a duplicate: each left one comment.
+- A kill-step number does not always mean the same plan step. My walk allowed for the `file: none` shift, but not for revisions. In `5e532c` (after) and `e708b8` (during), a revision added a search, so kill-step 4 hit a read. I ran step 4 again (`0909fe`, `913780`). In `264483`, a revision made kill-step 5 the comment.
+- `--die-after-step 5` never fired. In four tries (`604e70`, `746c50`, `c4710a`, `1a4aaa`), each run gave numbers to only four steps and finished uncrashed. The same crash after the comment did run, as `--die-after-step 4` (`0909fe`). The key closed it, and one comment was left.
+
 2. The contradiction test, and the record IDs the third session retrieved:
+
+Three sessions, each a separate process, on the real store (`state/store.db`):
+- Session 1, `python -m eval.store_candidates` (Part D), stored candidate C as record 3: semantic, `source: user`, `stated_by: priya-s (maintainer)`, `confirmed: true`.
+- Session 2, `python -m eval.contradiction_test contradict`, stored a made-up rule from the same maintainer, in the same way, as record 5: "For duplicates: label them `duplicate`, link the original, and close them after 14 days if the reporter has not replied." It superseded record 3: record 5 has `supersedes: 3`, and record 3 is now inactive. Record 3 stays in the store.
+- Session 3, `python -m eval.contradiction_test retrieve --write`, opened the store again. It retrieved the active rule on duplicates through the store's `active()` call, the one a run's read uses, and kept the records from a `user` about duplicates. It retrieved **[5]**.
+
+One process can pass from what it holds in memory. Three processes show that the supersession is on disk, and that a later session reads only the new rule. An append-only store would have returned [3, 5]: two active rules that contradict each other ("never close them" and "close them after 14 days"). The checker's supersession row gives 6 of 6.
+
 3. What your checkpoint cost, structured and with the conversation, and over how many runs:
+
+The mean of 5 normal real-model runs of 4201 (`3b5418`, `471015`, `479c40`, `e1dbe0`, `1a0d02`), for all of one run's checkpoints together:
+- structured: **21,277 bytes**;
+- with the conversation: **142,842 bytes**;
+- so the conversation makes the checkpoints 6.7 times larger (6.1 to 7.4 times, run by run).
+
+Method: each run saved its checkpoints through my checkpointer, as every run does. `ways/planned.py` also saved a second copy of each checkpoint to a separate file (`state/checkpoints_with_conversation.db`): the same five fields, plus every message the way had sent the model so far. The size is SQLite's summed `LENGTH` of the saved data (`python -m eval.checkpoint_bytes`). All five runs drafted `file: none`, so none saved a PR checkpoint.
+
+Where the bytes come from: `3b5418` saved 5 checkpoints and 19,459 bytes. Of these, 8,906 bytes are the plan, because each checkpoint holds the whole plan. `completed_calls` is 9,067 bytes, and 5,719 of them are tool results: the issue text, the search results and the file contents. Each checkpoint holds every call so far, so the size grows with each search that a revision adds. The run with one revision saved 3 checkpoints and 9,210 bytes. The runs with two revisions saved 5 or 6 checkpoints and 19,459 to 32,054 bytes. The conversation itself is 121,737 of the 141,286 bytes in `3b5418`'s copies, because each copy holds every message so far, and each fill message holds the earlier steps' results again.
+
+A resume needs none of the conversation. `restore()` reads only the five fields, and every derived-key case resumed correctly without it (crash matrix, derived keys: 20 of 20). This agrees with slide 14: a checkpoint holds enough to rebuild, not so much that it gets costly.
+
 4. Is what you built durable execution?
+
+No. It is a recovery aid. Slide 40's three questions give two noes and a partial yes.
+- Does it notice that the run died? No. No process watches the runs. When the harness's kill switch (`--die-after-step`, `--die-during-step`) stops a run, the runner prints "killed <run_id>" and adds `killed` to the ledger, but that comes from the kill switch itself. A real crash leaves only a trace with no `run_end` line, and nobody knows until someone looks.
+- Does it restart the run without a person? No. Each resume in the matrices was `python run.py --resume <run_id>`, from the matrix script, which a person started.
+- Does it stop finished work being done twice? Partly.
+  - Tool calls: yes, back to the last checkpoint. `completed_calls` acts as a journal up to each checkpoint. No finished call before the last checkpoint ran again (resume, not restart: 8 of 8). A call after the last checkpoint runs again, such as the file read after kill-step 3.
+  - Model calls: only what the checkpoint keeps. The checkpoint holds the plan, the checked draft and the PR's arguments, so a resume after the first checkpoint does not call the planner again, and a resume at the comment made no model call. No journal holds the other model calls. A kill at step 1 or 2, before the first checkpoint, repeated the whole run (5 to 7 model calls). A kill at step 3 repeated the step-3 fill.
+  - The call in flight: the key closes it, as slide 37 says. With derived keys, all 8 cases left one comment. With random keys, both kills at the comment left two.
+
+My answers match slide 42's row for LangGraph alone: no, no, and finished steps not run again. Slide 42's cells are the vendors' claims. Mine come from my own runs.
+
+What I would add:
+- A supervisor: a small service that finds runs with a `run_start`, no `run_end`, and no live process (from a heartbeat file, for example). It runs `run.py --resume <run_id>` itself, with a retry limit, and then gives the run to a person.
+- A true journal: record every finished call, tool or model, with its result, as it returns, and replay from it on a resume. The call record (`runs/<run_id>.calls.jsonl`) already logs tool calls, but `restore()` does not read it, and no record holds the model calls. The journal's cost (slide 37) is code that makes the same calls in the same order. My executor does that once the plan and each model reply come from the journal.
+- First, a cheaper step: a sync checkpoint right after the plan is validated. Then a kill at step 1 or 2 keeps the plan, and does not call the planner again.
+
 5. Which abstraction?
+
+The four questions, in order:
+- Do I know the steps and their order in advance? Yes, for each run, before any step runs. The planner writes the plan at the start. The validator checks it, and the schema check fixes its end: the PR, then the comment, last. The executor runs the steps in order, and runs nothing off the plan. A revision can add or change a search, but it goes through the same checks. This adds a graph: built from a validated plan for each run, not fixed in code.
+- Do runs outlive a single process? Yes. A killed run resumes in a new process under the same run_id (Part B), and later runs read the store again (Part D). This adds checkpoints on disk: sync, in SQLite, with a shared store next to them.
+- Do steps have irreversible side effects? Yes: the PR and the comment. This adds a key on every write. The key comes from the run, the plan step and the arguments, and the registry checks before each attempt (a PR by branch, a comment by key). Today a half-done run does not have to finish on its own, because a person resumes it. When RepoMind triages each new issue unattended, it must, and this answer then adds durable execution (item 4).
+- Do I want to own the context myself? Yes. My code builds each fill call's message: the step, the plan's notes, the memory block (each record's kind, source and age) and the earlier results. It keeps the store's records, and so every `issue:<n>` record, out of the planner. Part F depends on this control. This adds my own harness.
+
+The design: a graph from a validated plan, run by my own harness, with sync checkpoints on disk and a key on every write. That is RepoMind now. Durable execution comes next, when runs must finish without a person.
+
+One thing that slide 44 says no framework decides: what to checkpoint, and where. I decided it from the plan, not the clock (Part A): after each search and file read, and sync before each write, with the five fields and never the conversation. My runs tested it. The sync checkpoint before the comment closed the worst crash (item 1). Leaving out the conversation kept a run's checkpoints at 21,277 bytes, not 142,842 (item 3). The runs also show a gap: there is no checkpoint after the plan, so a kill at step 1 or 2 calls the planner again.
 
 ## Part F · Find the boundary that lost it
 

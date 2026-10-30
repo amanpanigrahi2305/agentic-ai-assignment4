@@ -199,11 +199,13 @@
     }
   },
   "checkpoint_bytes": {
-    "structured": null,
-    "with_conversation": null,
-    "runs": 0
+    "structured": 21277,
+    "with_conversation": 142842,
+    "runs": 5
   },
-  "contradiction_test": [],
+  "contradiction_test": [
+    5
+  ],
   "forgetting": {
     "attention": {
       "fact": null,
